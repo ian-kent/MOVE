@@ -1,14 +1,16 @@
 use v6;
 
 # https://github.com/mberends/http-server-simple/blob/master/examples/02-simple-small.pl6
+use MOVE::HTTP::Request::Grammar;
 
 class MOVE::Server::Daemon {
     has $.port;
     has $.host is rw;
     has IO::Socket::INET $!listener;
     has $.connection;   # returned by accept()
-    has Str $!request;
-    has Str @!headers;
+    #has Str $!request;
+    #has Str @!headers;
+    has Match $!parsed;
 
     class Output-Interceptor {
         has $.socket is rw;
@@ -38,32 +40,32 @@ class MOVE::Server::Daemon {
 
     method net_server () {
         # an overrideable, minimal implementation called by run()
-        self.print_banner;
+        say "{hhmm} ", self.WHAT, " started at {$!host}:{$!port}";
         self.setup_listener;
         self.after_setup_listener;
         while $!connection = $!listener.accept {
             self.accept_hook;
             # receive only one request per session - no keepalive yet
             my $received = $!connection.recv();
-            @!headers = split("\x0D\x0A", $received);
-            $!request = @!headers.shift;
-            my ($method, $uri, $protocol) = self.parse_request;
-            unless self.valid_http_method($method) { self.bad_request; }
-            my ( $path, $query-string ) = $uri.split('?',2);
-            $query-string //= ''; # // confuses P5 syntax highlighters
-            self.setup(
-                :method($method), # rakudobug RT
-                protocol     => $protocol || 'HTTP/0.9',
-                query_string => $query-string,
-                request_uri  => $uri,
-                path         => $path,
-                localname    => $!host,
-                localport    => $!port,
-                peername     => 'NYI',
-                peeraddr     => 'NYI',
-            );
-            self.headers( self.parse_headers() );
-            self.post_setup_hook;
+            $!parsed = MOVE::HTTP::Request::Grammar.parse($received);
+            if $!parsed {
+                # $*ERR.say: "Message parsed";
+            } else {
+                $*ERR.say: "Message not parsed: $received";
+            }
+            #self.setup(
+            #    :method($method), # rakudobug RT
+            #    protocol     => $protocol || 'HTTP/0.9',
+            #    query_string => $query-string,
+            #    request_uri  => $uri,
+            #    path         => $path,
+            #    localname    => $!host,
+            #    localport    => $!port,
+            #    peername     => 'NYI',
+            #    peeraddr     => 'NYI',
+            #);
+            #self.headers( self.parse_headers() );
+            $*ERR.say: "{hhmm} {$!parsed<resource>}";
             my $res = self.handler;
             #$!connection.close(); # client closes connection (error in chrome, might be because of keep-alive?)
         }
@@ -86,10 +88,9 @@ class MOVE::Server::Daemon {
         $html ~= "<html>\n<body>";
         $html ~= "MORE Server at {$.host}:{$.port}";
         $html ~= "<table border=\"1\">";
-        #for %!header.keys -> $key {
-        #    my $value = %!header{$key};
-        #    $html ~= "<tr><td>{$key}</td><td>{$value}</td></tr>";
-        #}
+        for $!parsed<header> -> $header {
+            $html ~= "<tr><td>{$header<header-name>}</td><td>{$header<header-value>}</td></tr>";
+        }
         $html ~= "</table>";
         #$html ~= "Path: {$!path}<br/>";
         #$html ~= "Query string: {$!query_string}<br/>";
@@ -103,47 +104,14 @@ class MOVE::Server::Daemon {
         print $html;
         # $*ERR.say: "end handle_request";
     }
-    method setup ( :$method, :$protocol, :$request_uri, :$path,
-        :$query_string, :$localport, :$peername, :$peeraddr, :$localname ) {
-    }
-    method headers (@headers) {
-        for @headers -> $key, $value {
-            self.header( $key, $value );
-        }
-    }
-    method header ( $key, $value ) {
-        # $*ERR.say: "header $key => $value";
-    }
     method accept_hook () {
         # $*ERR.say: "accepted";
-    }
-    method post_setup_hook {
-#       my $seconds = floor(time()) % 86400; # 24*60*60
-#       my $hhmm = floor($seconds/3600).fmt('%02d')
-#                ~ floor(($seconds/60) % 60).fmt(':%02d');
-        $*ERR.say: "{hhmm} {$!request}";
-    }
-    method print_banner {
-        say "{hhmm} ", self.WHAT, " started at {$!host}:{$!port}";
     }
     sub hhmm {
         my $seconds = floor(time) % 86400; # 24*60*60
         my $hhmm = floor($seconds/3600).fmt('%02d')
                  ~ floor(($seconds/60) % 60).fmt(':%02d');
         $hhmm;
-    }
-    # Methods below are probably not useful to override
-    method parse_request () {
-        $!request.split( /\s/ );
-    }
-    method parse_headers () {
-        return gather for @!headers -> $line {
-            my ( $key, $value ) = $line.split( ': ' );
-            if defined($key) and defined($value) {
-                # $*ERR.say: "parse_headers $key => $value";
-                take $key, $value;
-            }
-        }
     }
     method setup_listener () {
         # say "setup listener on port $!port";
@@ -154,9 +122,6 @@ class MOVE::Server::Daemon {
             :localport($!port),
             :listen,
         );
-    }
-    method valid_http_method (Str $candidate_method) {
-        $candidate_method eq any( <GET POST HEAD PUT DELETE> );
     }
     # Not Yet Implemented
     method background ( *@arguments ) { <...> }
